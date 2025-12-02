@@ -10,10 +10,14 @@
     type OnConnect,
     type OnConnectEnd,
     type NodeEventWithPointer,
+    type OnBeforeDelete,
+    getIncomers,
+    getOutgoers,
+    getConnectedEdges,
   } from '@xyflow/svelte';
   import { supabase } from '$lib/supabaseClient';
   import { onMount } from 'svelte';
-  import { uiColorToDb, dbColorToUi } from '$lib/utils';
+  import { uiColorToDb, dbColorToUi, getMexId, getMexEdgeId, saveFlowToSupabase } from '$lib/utils';
 
   import '@xyflow/svelte/dist/style.css';
 
@@ -29,26 +33,45 @@
 
   let nodes = $state.raw<Node[]>(initialNodes);
   let edges = $state.raw<Edge[]>([]);
+  let nodeGroupsList: any[] = $state([]);
 
   let loaded = false;
 
   onMount(async () => {
     const { data: nodesData } = await supabase.from('nodes').select('*');
     const { data: edgesData } = await supabase.from('edges').select('*');
+    const { data: groupMembersData } = await supabase.from('node_group_members').select('*');
+    const { data: groupsData } = await supabase.from('node_groups').select('*');
+
+    if (groupsData) {
+      nodeGroupsList = groupsData;
+    }
+
+    const nodeGroups = new Map();
+    if (groupMembersData) {
+      groupMembersData.forEach((m: any) => {
+        nodeGroups.set(m.node_id, { id: m.id, group_id: m.node_group_id });
+      });
+    }
 
     if (nodesData && nodesData.length > 0) {
-      nodes = nodesData.map((n: any) => ({
-        id: n.id,
-        type: n.id === 'A' ? 'input' : 'default',
-        data: {
-          label: n.id,
-          x_coord: n.decision_x,
-          y_coord: n.decision_y,
-          color: dbColorToUi(n.color),
-        },
-        position: { x: n.location_x, y: n.location_y },
-        style: `background: ${dbColorToUi(n.color)}`,
-      }));
+      nodes = nodesData.map((n: any) => {
+        const groupInfo = nodeGroups.get(n.id);
+        return {
+          id: n.id,
+          type: n.id === 'A' ? 'input' : 'default',
+          data: {
+            label: n.id,
+            x_coord: n.decision_x,
+            y_coord: n.decision_y,
+            color: dbColorToUi(n.color),
+            node_group_member_id: groupInfo?.id,
+            node_group_id: groupInfo?.group_id,
+          },
+          position: { x: n.location_x, y: n.location_y },
+          style: `background: ${dbColorToUi(n.color)}`,
+        };
+      });
     } else {
       nodes = initialNodes;
     }
@@ -66,79 +89,7 @@
 
   async function saveFlow() {
     if (!loaded) return;
-
-    // 1. Upsert Nodes
-    const dbNodes = nodes.map((n) => ({
-      id: n.id,
-      color: uiColorToDb(n.data.color as string),
-      location_x: n.position.x,
-      location_y: n.position.y,
-      decision_x: n.data.x_coord,
-      decision_y: n.data.y_coord,
-    }));
-
-    const { error: upsertError } = await supabase.from('nodes').upsert(dbNodes);
-    if (upsertError) console.error('Error upserting nodes:', upsertError);
-
-    // 2. Delete obsolete nodes
-    const currentIds = nodes.map((n) => n.id);
-    const { data: allDbNodes } = await supabase.from('nodes').select('id');
-    if (allDbNodes) {
-      const toDelete = allDbNodes
-        .map((n: any) => n.id)
-        .filter((id: string) => !currentIds.includes(id));
-
-      if (toDelete.length > 0) {
-        const { error: deleteError } = await supabase
-          .from('nodes')
-          .delete()
-          .in('id', toDelete);
-        if (deleteError) console.error('Error deleting nodes:', deleteError);
-      }
-    }
-
-    // 3. Replace Edges
-    const { error: deleteEdgesError } = await supabase
-      .from('edges')
-      .delete()
-      .gt('id', 0);
-    if (deleteEdgesError)
-      console.error('Error deleting edges:', deleteEdgesError);
-
-    // Calculate valid IDs first
-    const validIds = new Set<number>();
-    edges.forEach(e => {
-        const pid = parseInt(e.id);
-        if (!isNaN(pid)) validIds.add(pid);
-    });
-
-    // Helper to get next ID
-    let nextId = 1;
-    const getNextId = () => {
-        while (validIds.has(nextId)) nextId++;
-        validIds.add(nextId);
-        return nextId;
-    };
-
-    const dbEdges = edges.map((e) => {
-        let pid = parseInt(e.id);
-        if (isNaN(pid)) {
-            pid = getNextId();
-        }
-        return {
-            id: pid,
-            source_node_id: e.source,
-            target_node_id: e.target,
-        };
-    });
-
-    if (dbEdges.length > 0) {
-      const { error: insertEdgesError } = await supabase
-        .from('edges')
-        .insert(dbEdges);
-      if (insertEdgesError)
-        console.error('Error inserting edges:', insertEdgesError);
-    }
+    await saveFlowToSupabase(supabase, nodes, edges);
   }
 
   let saveTimeout: ReturnType<typeof setTimeout>;
@@ -156,35 +107,40 @@
     }, 1000);
   });
 
-  const getMexId = (currentNodes: Node[]) => {
-    const existingIds = new Set(currentNodes.map((n) => n.id));
-    let i = 0;
-    while (true) {
-      const letter = String.fromCharCode(65 + (i % 26));
-      const prefix =
-        Math.floor(i / 26) > 0
-          ? String.fromCharCode(64 + Math.floor(i / 26))
-          : '';
-      const candidateId = prefix + letter;
-      if (!existingIds.has(candidateId)) {
-        return candidateId;
-      }
-      i++;
-    }
-  };
-
-  const getMexEdgeId = (currentEdges: Edge[]) => {
-    const existingIds = new Set(currentEdges.map((e) => parseInt(e.id)).filter(n => !isNaN(n)));
-    let i = 1;
-    while (true) {
-      if (!existingIds.has(i)) {
-        return String(i);
-      }
-      i++;
-    }
-  };
 
   const { screenToFlowPosition, deleteElements } = useSvelteFlow();
+
+  const onbeforedelete: any = async ({ nodes: deletedNodes, edges: _edges }: { nodes: Node[], edges: Edge[] }) => {
+    let remainingNodes = [...nodes]; 
+    
+    edges = deletedNodes.reduce((acc, node) => {
+      const incomers = getIncomers(node, remainingNodes, acc);
+      const outgoers = getOutgoers(node, remainingNodes, acc);
+      const connectedEdges = getConnectedEdges([node], acc);
+
+      const remainingEdges = acc.filter((edge) => !connectedEdges.includes(edge));
+
+      const createdEdges = incomers.flatMap(({ id: source }) =>
+        outgoers.map(({ id: target }) => {
+            const edgeId = getMexEdgeId([...remainingEdges]);
+            return {
+                id: edgeId,
+                source,
+                target,
+                animated: true,
+            };
+        }),
+      );
+
+      remainingNodes = remainingNodes.filter((rn) => rn.id !== node.id);
+
+      return [...remainingEdges, ...createdEdges];
+    }, edges);
+
+    nodes = remainingNodes;
+
+    return true;
+  };
 
   const handleConnect: OnConnect = (params) => {
     // Remove any existing edge that matches the connection to ensure we replace it with the animated one
@@ -246,6 +202,9 @@
   let nodeX = $state(0);
   let nodeY = $state(0);
   let nodeColor = $state('#ffffff');
+  let nodeGroupId: number | null = $state(null);
+  let isCreatingGroup = $state(false);
+  let newGroupName = $state('');
 
   const handleNodeClick = ({ node }: { node: Node }) => {
     selectedNodeId = node.id;
@@ -253,10 +212,14 @@
     nodeX = node.data.x_coord as number;
     nodeY = node.data.y_coord as number;
     nodeColor = (node.data.color as string) || '#ffffff';
+    nodeGroupId = (node.data.node_group_id as number) || null;
+    isCreatingGroup = false;
+    newGroupName = '';
   };
 
   const handlePaneClick = () => {
     selectedNodeId = null;
+    isCreatingGroup = false;
   };
 
   function updateNode() {
@@ -271,6 +234,7 @@
             x_coord: nodeX,
             y_coord: nodeY,
             color: nodeColor,
+            node_group_id: nodeGroupId,
           },
           style: `background: ${nodeColor}`,
         };
@@ -298,6 +262,49 @@
     nodeColor = (event.target as HTMLSelectElement).value;
     updateNode();
   }
+
+  function updateGroup(event: Event) {
+    const val = (event.target as HTMLSelectElement).value;
+    if (val === '__CREATE_NEW__') {
+        isCreatingGroup = true;
+        return;
+    }
+    nodeGroupId = val ? parseInt(val) : null;
+    updateNode();
+  }
+
+  async function createGroup() {
+    if (!newGroupName.trim()) return;
+    
+    const { data, error } = await supabase
+        .from('node_groups')
+        .insert({ name: newGroupName })
+        .select()
+        .single();
+    
+    if (error) {
+        console.error('Error creating group:', error);
+        return;
+    }
+
+    if (data) {
+        nodeGroupsList = [...nodeGroupsList, data];
+        nodeGroupId = data.id;
+        isCreatingGroup = false;
+        newGroupName = '';
+        updateNode();
+    }
+  }
+
+  function cancelCreateGroup() {
+    isCreatingGroup = false;
+    newGroupName = '';
+    // Reset selection to current node's group if any
+    const node = nodes.find(n => n.id === selectedNodeId);
+    if (node) {
+        nodeGroupId = (node.data.node_group_id as number) || null;
+    }
+  }
 </script>
 
 <div class="h-screen w-screen">
@@ -310,6 +317,7 @@
     onnodecontextmenu={handleContextMenu}
     onnodeclick={handleNodeClick}
     onpaneclick={handlePaneClick}
+    {onbeforedelete}
   >
     <Background />
     {#if selectedNodeId}
@@ -334,6 +342,31 @@
                     <option value="#bbf7d0">Green</option>
                     <option value="#fecaca">Red</option>
                 </select>
+            </label>
+            <label class="flex flex-col">
+                <span class="text-sm font-medium">Group:</span>
+                {#if isCreatingGroup}
+                    <div class="flex flex-col gap-1">
+                        <input 
+                            type="text" 
+                            placeholder="New Group Name"
+                            bind:value={newGroupName}
+                            class="border p-1 rounded"
+                        />
+                        <div class="flex gap-1">
+                            <button onclick={createGroup} class="bg-blue-500 text-white px-2 py-1 rounded text-xs">Create</button>
+                            <button onclick={cancelCreateGroup} class="bg-gray-300 px-2 py-1 rounded text-xs">Cancel</button>
+                        </div>
+                    </div>
+                {:else}
+                    <select value={nodeGroupId || ''} onchange={updateGroup} class="border p-1 rounded">
+                        <option value="">None</option>
+                        {#each nodeGroupsList as group}
+                            <option value={group.id}>{group.name}</option>
+                        {/each}
+                        <option value="__CREATE_NEW__">+ Create New Group</option>
+                    </select>
+                {/if}
             </label>
         </div>
       </Panel>
