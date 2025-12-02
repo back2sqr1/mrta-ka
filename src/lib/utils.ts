@@ -38,20 +38,74 @@ export async function saveFlowToSupabase(
     edges: Edge[]
 ) {
     // 1. Upsert Nodes
-    const dbNodes = nodes.map((n) => ({
-      id: n.id,
-      color: uiColorToDb(n.data.color as string),
-      location_x: n.position.x,
-      location_y: n.position.y,
-      decision_x: n.data.x_coord,
-      decision_y: n.data.y_coord,
-    }));
+    // Filter out group nodes (which we generate dynamically) and convert relative positions back to absolute
+    const dbNodes = nodes
+        .filter((n) => n.type !== 'group')
+        .map((n) => {
+            let x = n.position.x;
+            let y = n.position.y;
+            let group_x = null;
+            let group_y = null;
+
+            // If node has a parent, add parent's position to get absolute coordinates
+            if (n.parentId) {
+                // Save local coordinates for group_x/y
+                group_x = n.position.x;
+                group_y = n.position.y;
+
+                const parent = nodes.find((p) => p.id === n.parentId);
+                if (parent) {
+                    x += parent.position.x;
+                    y += parent.position.y;
+                }
+            }
+
+            return {
+                id: n.id,
+                color: uiColorToDb(n.data.color as string),
+                location_x: x,
+                location_y: y,
+                decision_x: n.data.x_coord,
+                decision_y: n.data.y_coord,
+                group_x: group_x,
+                group_y: group_y,
+            };
+        });
 
     const { error: upsertError } = await supabase.from('nodes').upsert(dbNodes);
     if (upsertError) console.error('Error upserting nodes:', upsertError);
 
+    // 1.5 Upsert Groups (Save positions)
+    const groupNodes = nodes.filter(n => n.type === 'group');
+    if (groupNodes.length > 0) {
+        const dbGroups = groupNodes.map(g => {
+            // Try to get width/height from node properties or style
+            let width = g.width ?? g.measured?.width;
+            let height = g.height ?? g.measured?.height;
+
+            if (!width || !height) {
+                 const styleWidth = /width:\s*([\d.]+)px/.exec(g.style || '');
+                 const styleHeight = /height:\s*([\d.]+)px/.exec(g.style || '');
+                 if (styleWidth) width = parseFloat(styleWidth[1]);
+                 if (styleHeight) height = parseFloat(styleHeight[1]);
+            }
+
+            return {
+                id: parseInt(g.id.replace('group-', '')),
+                name: g.data.label, // Ensure name is preserved/updated
+                position_x: g.position.x,
+                position_y: g.position.y,
+                box_width: width,
+                box_height: height
+            };
+        });
+        
+        const { error: groupError } = await supabase.from('node_groups').upsert(dbGroups);
+        if (groupError) console.error('Error upserting groups:', groupError);
+    }
+
     // 2. Delete obsolete nodes
-    const currentIds = nodes.map((n) => n.id);
+    const currentIds = nodes.filter(n => n.type !== 'group').map((n) => n.id);
     const { data: allDbNodes } = await supabase.from('nodes').select('id');
     if (allDbNodes) {
       const toDelete = allDbNodes
@@ -59,6 +113,13 @@ export async function saveFlowToSupabase(
         .filter((id: string) => !currentIds.includes(id));
 
       if (toDelete.length > 0) {
+        // Explicitly delete from node_group_members first
+        const { error: deleteMembersError } = await supabase
+            .from('node_group_members')
+            .delete()
+            .in('node_id', toDelete);
+        if (deleteMembersError) console.error('Error deleting obsolete node group members:', deleteMembersError);
+
         const { error: deleteError } = await supabase
           .from('nodes')
           .delete()

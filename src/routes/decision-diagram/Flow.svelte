@@ -3,7 +3,6 @@
     SvelteFlow,
     useSvelteFlow,
     Background,
-    Panel,
     addEdge,
     type Edge,
     type Node,
@@ -18,8 +17,14 @@
   import { supabase } from '$lib/supabaseClient';
   import { onMount } from 'svelte';
   import { uiColorToDb, dbColorToUi, getMexId, getMexEdgeId, saveFlowToSupabase } from '$lib/utils';
+  import GroupNode from './GroupNode.svelte';
+  import EditPanel from './EditPanel.svelte';
 
   import '@xyflow/svelte/dist/style.css';
+
+  const nodeTypes = {
+    group: GroupNode,
+  };
 
   const initialNodes: Node[] = [
     {
@@ -55,7 +60,7 @@
     }
 
     if (nodesData && nodesData.length > 0) {
-      nodes = nodesData.map((n: any) => {
+      let flowNodes = nodesData.map((n: any) => {
         const groupInfo = nodeGroups.get(n.id);
         return {
           id: n.id,
@@ -67,11 +72,105 @@
             color: dbColorToUi(n.color),
             node_group_member_id: groupInfo?.id,
             node_group_id: groupInfo?.group_id,
+            group_x: n.group_x,
+            group_y: n.group_y,
           },
           position: { x: n.location_x, y: n.location_y },
           style: `background: ${dbColorToUi(n.color)}`,
         };
       });
+
+      // Process Groups to create Group Nodes
+      const groupsMap = new Map<number, { id: number, name: string, position_x?: number, position_y?: number, box_width?: number, box_height?: number, nodes: Node[] }>();
+      
+      if (groupsData) {
+         groupsData.forEach((g: any) => groupsMap.set(g.id, { ...g, nodes: [] }));
+      }
+
+      // Assign nodes to their groups in the map
+      flowNodes.forEach((n: Node) => {
+          const gid = n.data.node_group_id as number;
+          if (gid && groupsMap.has(gid)) {
+              groupsMap.get(gid)!.nodes.push(n);
+          }
+      });
+
+      const groupNodes: Node[] = [];
+      
+      groupsMap.forEach((g) => {
+          if (g.nodes.length === 0) return;
+
+          const padding = 40;
+          let groupX: number;
+          let groupY: number;
+
+          // Determine Group Position
+          if (g.position_x != null && g.position_y != null) {
+              groupX = g.position_x;
+              groupY = g.position_y;
+          } else {
+              // Fallback: Calculate from children's absolute positions
+              const xs = g.nodes.map(n => n.position.x);
+              const ys = g.nodes.map(n => n.position.y);
+              groupX = Math.min(...xs) - padding;
+              groupY = Math.min(...ys) - padding;
+          }
+
+          // Determine Dimensions based on children relative to the group position
+          // We need to calculate where children *will* be to know the size
+          let minRelX = Infinity, maxRelX = -Infinity;
+          let minRelY = Infinity, maxRelY = -Infinity;
+
+          g.nodes.forEach(n => {
+              let relX, relY;
+              if (n.data.group_x != null && n.data.group_y != null) {
+                  relX = n.data.group_x as number;
+                  relY = n.data.group_y as number;
+              } else {
+                  relX = n.position.x - groupX;
+                  relY = n.position.y - groupY;
+              }
+              
+              // Update node with relative position for Svelte Flow
+              n.parentId = `group-${g.id}`;
+              n.position.x = relX;
+              n.position.y = relY;
+              // n.extent = 'parent'; // Removed to allow nodes to go outside
+              
+              minRelX = Math.min(minRelX, relX);
+              maxRelX = Math.max(maxRelX, relX);
+              minRelY = Math.min(minRelY, relY);
+              maxRelY = Math.max(maxRelY, relY);
+          });
+
+          // If for some reason we have no children (checked above), defaults
+          if (minRelX === Infinity) { minRelX = 0; maxRelX = 100; minRelY = 0; maxRelY = 100; }
+
+          let width: number;
+          let height: number;
+
+          if (g.box_width != null && g.box_height != null) {
+              width = g.box_width;
+              height = g.box_height;
+          } else {
+              // Calculate width/height with some padding/margin
+              width = maxRelX + 150 + padding; 
+              height = maxRelY + 50 + padding;
+          }
+
+          const groupNode: Node = {
+              id: `group-${g.id}`,
+              type: 'group',
+              data: { label: g.name },
+              position: { x: groupX, y: groupY },
+              style: `width: ${width}px; height: ${height}px; background-color: rgba(240, 240, 240, 0.5); border: 2px dashed #ccc; z-index: -1;`,
+              width: width,
+              height: height,
+          };
+          groupNodes.push(groupNode);
+      });
+
+      nodes = [...groupNodes, ...flowNodes];
     } else {
       nodes = initialNodes;
     }
@@ -205,14 +304,28 @@
   let nodeGroupId: number | null = $state(null);
   let isCreatingGroup = $state(false);
   let newGroupName = $state('');
+  let isGroupNode = $state(false);
+  let groupWidth = $state(0);
+  let groupHeight = $state(0);
 
   const handleNodeClick = ({ node }: { node: Node }) => {
     selectedNodeId = node.id;
     nodeLabel = node.data.label as string;
-    nodeX = node.data.x_coord as number;
-    nodeY = node.data.y_coord as number;
-    nodeColor = (node.data.color as string) || '#ffffff';
-    nodeGroupId = (node.data.node_group_id as number) || null;
+    
+    if (node.type === 'group') {
+        isGroupNode = true;
+        nodeX = node.position.x;
+        nodeY = node.position.y;
+        groupWidth = node.width ?? parseFloat(/width:\s*([\d.]+)px/.exec(node.style || '')?.[1] || '0');
+        groupHeight = node.height ?? parseFloat(/height:\s*([\d.]+)px/.exec(node.style || '')?.[1] || '0');
+    } else {
+        isGroupNode = false;
+        nodeX = node.data.x_coord as number;
+        nodeY = node.data.y_coord as number;
+        nodeColor = (node.data.color as string) || '#ffffff';
+        nodeGroupId = (node.data.node_group_id as number) || null;
+    }
+
     isCreatingGroup = false;
     newGroupName = '';
   };
@@ -226,18 +339,35 @@
     if (!selectedNodeId) return;
     nodes = nodes.map((node) => {
       if (node.id === selectedNodeId) {
-        return {
-          ...node,
-          data: {
-            ...node.data,
-            label: nodeLabel,
-            x_coord: nodeX,
-            y_coord: nodeY,
-            color: nodeColor,
-            node_group_id: nodeGroupId,
-          },
-          style: `background: ${nodeColor}`,
-        };
+        if (node.type === 'group') {
+             return {
+                ...node,
+                data: {
+                    ...node.data,
+                    label: nodeLabel
+                },
+                position: {
+                    x: nodeX,
+                    y: nodeY
+                },
+                width: groupWidth,
+                height: groupHeight,
+                style: `width: ${groupWidth}px; height: ${groupHeight}px; background-color: rgba(240, 240, 240, 0.5); border: 2px dashed #ccc; z-index: -1;`
+             };
+        } else {
+            return {
+            ...node,
+            data: {
+                ...node.data,
+                label: nodeLabel,
+                x_coord: nodeX,
+                y_coord: nodeY,
+                color: nodeColor,
+                node_group_id: nodeGroupId,
+            },
+            style: `background: ${nodeColor}`,
+            };
+        }
       }
       return node;
     });
@@ -305,6 +435,14 @@
         nodeGroupId = (node.data.node_group_id as number) || null;
     }
   }
+
+  const handleNodeDragStop = () => {
+    saveFlow();
+  };
+
+  const handleNodeResizeEnd = () => {
+    saveFlow();
+  };
 </script>
 
 <div class="h-screen w-screen">
@@ -312,64 +450,35 @@
     bind:nodes
     bind:edges
     fitView
+    {nodeTypes}
     onconnect={handleConnect}
     onconnectend={handleConnectEnd}
     onnodecontextmenu={handleContextMenu}
     onnodeclick={handleNodeClick}
     onpaneclick={handlePaneClick}
+    onnodedragstop={handleNodeDragStop}
+    onnoderesizeend={handleNodeResizeEnd}
     {onbeforedelete}
   >
     <Background />
-    {#if selectedNodeId}
-      <Panel position="top-right" class="bg-white p-4 rounded shadow-lg border border-gray-200">
-        <div class="flex flex-col gap-2">
-            <h3 class="font-bold">Edit Node {selectedNodeId}</h3>
-            <label class="flex flex-col">
-                <span class="text-sm font-medium">Label:</span>
-                <input type="text" value={nodeLabel} oninput={updateLabel} class="border p-1 rounded" />
-            </label>
-            <label class="flex flex-col">
-                <span class="text-sm font-medium">X Coord:</span>
-                <input type="number" value={nodeX} oninput={updateX} class="border p-1 rounded" />
-            </label>
-            <label class="flex flex-col">
-                <span class="text-sm font-medium">Y Coord:</span>
-                <input type="number" value={nodeY} oninput={updateY} class="border p-1 rounded" />
-            </label>
-            <label class="flex flex-col">
-                <span class="text-sm font-medium">Color:</span>
-                <select value={nodeColor} onchange={updateColor} class="border p-1 rounded">
-                    <option value="#bbf7d0">Green</option>
-                    <option value="#fecaca">Red</option>
-                </select>
-            </label>
-            <label class="flex flex-col">
-                <span class="text-sm font-medium">Group:</span>
-                {#if isCreatingGroup}
-                    <div class="flex flex-col gap-1">
-                        <input 
-                            type="text" 
-                            placeholder="New Group Name"
-                            bind:value={newGroupName}
-                            class="border p-1 rounded"
-                        />
-                        <div class="flex gap-1">
-                            <button onclick={createGroup} class="bg-blue-500 text-white px-2 py-1 rounded text-xs">Create</button>
-                            <button onclick={cancelCreateGroup} class="bg-gray-300 px-2 py-1 rounded text-xs">Cancel</button>
-                        </div>
-                    </div>
-                {:else}
-                    <select value={nodeGroupId || ''} onchange={updateGroup} class="border p-1 rounded">
-                        <option value="">None</option>
-                        {#each nodeGroupsList as group}
-                            <option value={group.id}>{group.name}</option>
-                        {/each}
-                        <option value="__CREATE_NEW__">+ Create New Group</option>
-                    </select>
-                {/if}
-            </label>
-        </div>
-      </Panel>
-    {/if}
+    <EditPanel
+        {selectedNodeId}
+        {isGroupNode}
+        {nodeLabel}
+        {nodeX}
+        {nodeY}
+        {nodeColor}
+        {nodeGroupId}
+        {isCreatingGroup}
+        bind:newGroupName
+        {nodeGroupsList}
+        {updateLabel}
+        {updateX}
+        {updateY}
+        {updateColor}
+        {updateGroup}
+        {createGroup}
+        {cancelCreateGroup}
+    />
   </SvelteFlow>
 </div>
