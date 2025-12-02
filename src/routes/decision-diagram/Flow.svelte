@@ -4,8 +4,10 @@
     useSvelteFlow,
     Background,
     Panel,
+    addEdge,
     type Edge,
     type Node,
+    type OnConnect,
     type OnConnectEnd,
     type NodeEventWithPointer,
   } from '@xyflow/svelte';
@@ -53,7 +55,7 @@
 
     if (edgesData) {
       edges = edgesData.map((e: any) => ({
-        id: `${e.source_node_id}--${e.target_node_id}`,
+        id: String(e.id),
         source: e.source_node_id,
         target: e.target_node_id,
         animated: true,
@@ -103,10 +105,32 @@
     if (deleteEdgesError)
       console.error('Error deleting edges:', deleteEdgesError);
 
-    const dbEdges = edges.map((e) => ({
-      source_node_id: e.source,
-      target_node_id: e.target,
-    }));
+    // Calculate valid IDs first
+    const validIds = new Set<number>();
+    edges.forEach(e => {
+        const pid = parseInt(e.id);
+        if (!isNaN(pid)) validIds.add(pid);
+    });
+
+    // Helper to get next ID
+    let nextId = 1;
+    const getNextId = () => {
+        while (validIds.has(nextId)) nextId++;
+        validIds.add(nextId);
+        return nextId;
+    };
+
+    const dbEdges = edges.map((e) => {
+        let pid = parseInt(e.id);
+        if (isNaN(pid)) {
+            pid = getNextId();
+        }
+        return {
+            id: pid,
+            source_node_id: e.source,
+            target_node_id: e.target,
+        };
+    });
 
     if (dbEdges.length > 0) {
       const { error: insertEdgesError } = await supabase
@@ -149,13 +173,41 @@
     }
   };
 
+  const getMexEdgeId = (currentEdges: Edge[]) => {
+    const existingIds = new Set(currentEdges.map((e) => parseInt(e.id)).filter(n => !isNaN(n)));
+    let i = 1;
+    while (true) {
+      if (!existingIds.has(i)) {
+        return String(i);
+      }
+      i++;
+    }
+  };
+
   const { screenToFlowPosition, deleteElements } = useSvelteFlow();
+
+  const handleConnect: OnConnect = (params) => {
+    // Remove any existing edge that matches the connection to ensure we replace it with the animated one
+    const filteredEdges = edges.filter(e => {
+        const isSameSource = e.source === params.source;
+        const isSameTarget = e.target === params.target;
+        const isSameSourceHandle = (e.sourceHandle ?? null) === (params.sourceHandle ?? null);
+        const isSameTargetHandle = (e.targetHandle ?? null) === (params.targetHandle ?? null);
+        return !(isSameSource && isSameTarget && isSameSourceHandle && isSameTargetHandle);
+    });
+
+    const edgeId = getMexEdgeId(filteredEdges);
+    console.log('Connecting with edge ID:', edgeId, { source: params.source, target: params.target, id: edgeId, animated: true });
+    edges = addEdge({ ...params, id: edgeId, animated: true }, filteredEdges);
+  };
 
   const handleConnectEnd: OnConnectEnd = (event, connectionState) => {
     if (connectionState.isValid) return;
+    // console.log("Connect end - adding new node");
 
     const sourceNodeId = connectionState.fromNode?.id ?? 'A';
     const id = getMexId(nodes);
+    const edgeId = getMexEdgeId(edges);
     const { clientX, clientY } =
       'changedTouches' in event ? event.changedTouches[0] : event;
 
@@ -177,7 +229,7 @@
       {
         source: sourceNodeId,
         target: id,
-        id: `${sourceNodeId}--${id}`,
+        id: edgeId,
         animated: true,
       },
     ];
@@ -253,6 +305,7 @@
     bind:nodes
     bind:edges
     fitView
+    onconnect={handleConnect}
     onconnectend={handleConnectEnd}
     onnodecontextmenu={handleContextMenu}
     onnodeclick={handleNodeClick}
