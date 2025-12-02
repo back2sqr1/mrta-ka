@@ -11,6 +11,7 @@
   } from '@xyflow/svelte';
   import { supabase } from '$lib/supabaseClient';
   import { onMount } from 'svelte';
+  import { uiColorToDb, dbColorToUi } from '$lib/utils';
 
   import '@xyflow/svelte/dist/style.css';
 
@@ -28,9 +29,6 @@
   let edges = $state.raw<Edge[]>([]);
 
   let loaded = false;
-
-  const uiColorToDb = (hex: string) => (hex === '#fecaca' ? 'red' : 'green');
-  const dbColorToUi = (color: string) => (color === 'red' ? '#fecaca' : '#bbf7d0');
 
   onMount(async () => {
     const { data: nodesData } = await supabase.from('nodes').select('*');

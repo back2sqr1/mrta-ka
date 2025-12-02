@@ -12,20 +12,29 @@
   } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
   import PointNode from './PointNode.svelte';
+  import RobotNode from './RobotNode.svelte';
 
-  let { nodes = $bindable([]), edges = $bindable([]) } = $props<{
+  let { nodes = $bindable([]), edges = $bindable([]), onNodeDragStop } = $props<{
     nodes: Node[];
     edges: Edge[];
+    onNodeDragStop?: (event: any) => void;
   }>();
 
   const nodeTypes: NodeTypes = {
     point: PointNode,
+    robot: RobotNode,
   };
 
   const defaultEdgeOptions = {
     type: 'smoothstep',
     animated: true,
   };
+
+  function handleNodeDragStop(event: any) {
+    if (onNodeDragStop) {
+      onNodeDragStop(event);
+    }
+  }
 
   function onDragOver(event: DragEvent) {
     event.preventDefault();
@@ -55,7 +64,8 @@
     {nodeTypes}
     {defaultEdgeOptions}
     nodesConnectable={false}
-    nodesDraggable={false}
+    on:nodedragstop={handleNodeDragStop}
+    onnodedragstop={handleNodeDragStop}
     fitView
     minZoom={0.1}
     maxZoom={4}
