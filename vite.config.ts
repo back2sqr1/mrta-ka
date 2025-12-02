@@ -6,6 +6,15 @@ import { sveltekit } from '@sveltejs/kit/vite';
 
 export default defineConfig({
 	plugins: [tailwindcss(), sveltekit(), devtoolsJson()],
+	build: {
+		rollupOptions: {
+			onwarn(warning, warn) {
+				if (warning.message.includes('handleConnectionChange')) return;
+				if (warning.code === 'UNUSED_EXTERNAL_IMPORT') return;
+				warn(warning);
+			}
+		}
+	},
 	test: {
 		expect: { requireAssertions: true },
 		projects: [
