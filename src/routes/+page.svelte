@@ -1,70 +1,96 @@
 <script lang="ts">
     import CartesianGrid from '$lib/components/CartesianGrid.svelte';
+    import ControlPanel from '$lib/components/ControlPanel.svelte';
     import type { Node, Edge } from '@xyflow/svelte';
     import { onMount } from 'svelte';
-    import { supabase } from '$lib/supabaseClient';
-    import { dbColorToUi } from '$lib/utils';
+    import { fetchMapData, generateRobotSteps, updateRobotPositionInDb } from '$lib/mapData';
 
-    let nodes = $state<Node[]>([]);
     let edges = $state<Edge[]>([]);
+    
+    let staticNodes = $state<Node[]>([]);
+    let initialRobots = $state<Node[]>([]);
+    
+    let selectedLeaderId = $state<string | null>(null);
+    let selectedMovingRobotId = $state<string | null>(null);
+    let selectedTargetNodeId = $state<string | null>(null);
+    let currentStep = $state(0);
 
-    onMount(async () => {
-        const { data: nodesData, error: nodesError } = await supabase.from('nodes').select('*');
-        if (nodesError) {
-            console.error('Error fetching nodes:', nodesError);
+    // Derived state for robot steps
+    let robotSteps = $derived(
+        initialRobots.length > 0 
+            ? generateRobotSteps(initialRobots, staticNodes, selectedLeaderId, selectedTargetNodeId, selectedMovingRobotId)
+            : []
+    );
+
+    // Derived state for displayed nodes
+    let nodes = $derived.by(() => {
+        if (robotSteps.length > 0) {
+            // Ensure currentStep is valid
+            const safeStep = Math.min(currentStep, robotSteps.length - 1);
+            return [...staticNodes, ...robotSteps[safeStep]];
         }
-
-        const { data: robotsData, error: robotsError } = await supabase.from('robots').select('*');
-        if (robotsError) {
-            console.error('Error fetching robots:', robotsError);
-        }
-
-        let newNodes: Node[] = [];
-
-        if (nodesData) {
-            newNodes = [
-                ...newNodes,
-                ...nodesData.map((n: any) => ({
-                    id: String(n.id),
-                    type: 'point',
-                    position: { x: n.location_x, y: n.location_y },
-                    data: { label: n.id, color: dbColorToUi(n.color) },
-                    draggable: false
-                }))
-            ];
-        }
-
-        if (robotsData) {
-            newNodes = [
-                ...newNodes,
-                ...robotsData.map((r: any) => ({
-                    id: `robot-${r.id}`,
-                    type: 'robot',
-                    position: { x: r.position_x, y: r.position_y },
-                    data: { label: `R${r.id}`, is_leader: r.is_leader },
-                    draggable: true
-                }))
-            ];
-        }
-
-        nodes = newNodes;
+        return [...staticNodes];
     });
 
+    onMount(async () => {
+        const data = await fetchMapData();
+        staticNodes = data.staticNodes;
+        initialRobots = data.initialRobots;
+        
+        // Initialize selection based on data
+        if (initialRobots.length > 0) {
+            const currentLeader = initialRobots.find((r: any) => r.data.is_leader);
+            if (currentLeader) {
+                selectedLeaderId = currentLeader.id;
+            } else {
+                selectedLeaderId = initialRobots[0].id;
+            }
+            selectedMovingRobotId = selectedLeaderId;
+        }
+
+        if (staticNodes.length > 0) {
+            selectedTargetNodeId = staticNodes[0].id;
+        }
+    });
+
+    function nextStep() {
+        if (currentStep < robotSteps.length - 1) {
+            currentStep++;
+        }
+    }
+
+    function prevStep() {
+        if (currentStep > 0) {
+            currentStep--;
+        }
+    }
+
     async function handleNodeDragStop(event: any) {
+        // Only allow DB updates on the initial step (Step 0)
+        if (currentStep !== 0) return;
+
         // Handle both CustomEvent (from on:nodedragstop) and direct callback (from onnodedragstop prop)
         const payload = event.detail || event;
         const node = payload.targetNode || payload.node;
         
         if (node && node.type === 'robot') {
-            const id = parseInt(node.id.replace('robot-', ''), 10);
-            
-            const { error } = await supabase.from('robots').update({
-                position_x: node.position.x,
-                position_y: node.position.y
-            }).eq('id', id);
+            const { error } = await updateRobotPositionInDb(node);
 
             if (error) {
                 console.error('Error updating robot position:', error);
+            } else {
+                // Update the initial step in our local state to match
+                // This will automatically trigger the derived stores to update
+                const robotIndex = initialRobots.findIndex(r => r.id === node.id);
+                if (robotIndex !== -1) {
+                    // Create a new object to ensure reactivity triggers
+                    const updatedRobots = [...initialRobots];
+                    updatedRobots[robotIndex] = { 
+                        ...updatedRobots[robotIndex], 
+                        position: { ...node.position } 
+                    };
+                    initialRobots = updatedRobots;
+                }
             }
         }
     }
@@ -79,7 +105,24 @@
                         Location Map
                     </h2>
                 </div>
-                <div class="mt-4 flex md:ml-4 md:mt-0">
+                <div class="mt-4 flex md:ml-4 md:mt-0 space-x-2">
+                    <button 
+                        onclick={prevStep}
+                        disabled={currentStep === 0}
+                        class="inline-flex items-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Prev
+                    </button>
+                    <span class="inline-flex items-center px-3 py-2 text-sm font-semibold text-gray-900">
+                        Step {currentStep + 1} / {Math.max(1, robotSteps.length)}
+                    </span>
+                    <button 
+                        onclick={nextStep}
+                        disabled={currentStep === robotSteps.length - 1}
+                        class="inline-flex items-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                        Next
+                    </button>
                     <a href="/decision-diagram" class="inline-flex items-center rounded-md bg-white px-3 py-2 text-sm font-semibold text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 hover:bg-gray-50">
                         Go to Decision Diagram
                     </a>
@@ -88,11 +131,20 @@
         </div>
     </div>
 
-    <div class="flex-1 p-8 pt-0 min-h-0">
-        <div class="max-w-7xl mx-auto h-full">
+    <div class="flex-1 p-8 pt-0 min-h-0 flex gap-6">
+        <div class="flex-1 h-full">
             <div class="bg-white rounded-lg shadow-lg overflow-hidden border border-gray-200 h-full relative flex items-center justify-center bg-slate-100">
                 <CartesianGrid bind:nodes bind:edges onNodeDragStop={handleNodeDragStop} />
             </div>
+        </div>
+        <div class="w-80 flex-none">
+            <ControlPanel 
+                robots={initialRobots} 
+                pointNodes={staticNodes}
+                bind:selectedLeaderId 
+                bind:selectedMovingRobotId
+                bind:selectedTargetNodeId 
+            />
         </div>
     </div>
 </div>
