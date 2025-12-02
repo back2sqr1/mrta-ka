@@ -98,7 +98,7 @@
       const groupNodes: Node[] = [];
       
       groupsMap.forEach((g) => {
-          if (g.nodes.length === 0) return;
+          // if (g.nodes.length === 0) return; // Allow empty groups to be rendered so they can be selected
 
           const padding = 40;
           let groupX: number;
@@ -112,8 +112,15 @@
               // Fallback: Calculate from children's absolute positions
               const xs = g.nodes.map(n => n.position.x);
               const ys = g.nodes.map(n => n.position.y);
-              groupX = Math.min(...xs) - padding;
-              groupY = Math.min(...ys) - padding;
+              
+              if (xs.length > 0) {
+                  groupX = Math.min(...xs) - padding;
+                  groupY = Math.min(...ys) - padding;
+              } else {
+                  // Default position for empty groups if no position saved
+                  groupX = 0;
+                  groupY = 0;
+              }
           }
 
           // Determine Dimensions based on children relative to the group position
@@ -355,8 +362,55 @@
                 style: `width: ${groupWidth}px; height: ${groupHeight}px; background-color: rgba(240, 240, 240, 0.5); border: 2px dashed #ccc; z-index: -1;`
              };
         } else {
+            // Handle Group Change Logic
+            const oldGroupId = node.data.node_group_id;
+            const newGroupId = nodeGroupId;
+            
+            let newParentId = node.parentId;
+            let newPosition = { ...node.position };
+            
+            if (oldGroupId !== newGroupId) {
+                // 1. Calculate Absolute Position
+                let absX = node.position.x;
+                let absY = node.position.y;
+                
+                if (node.parentId) {
+                    const parent = nodes.find(n => n.id === node.parentId);
+                    if (parent) {
+                        absX += parent.position.x;
+                        absY += parent.position.y;
+                    }
+                }
+
+                // 2. Determine new Parent and Relative Position
+                if (newGroupId) {
+                    const groupNodeId = `group-${newGroupId}`;
+                    const groupNode = nodes.find(n => n.id === groupNodeId);
+                    
+                    if (groupNode) {
+                        newParentId = groupNodeId;
+                        newPosition.x = absX - groupNode.position.x;
+                        newPosition.y = absY - groupNode.position.y;
+                    } else {
+                        // If group node doesn't exist on canvas yet, we can't parent it visually
+                        // It will be fixed on reload, or we should ensure group nodes exist
+                        console.warn(`Group node ${groupNodeId} not found on canvas.`);
+                        newParentId = undefined;
+                        newPosition.x = absX;
+                        newPosition.y = absY;
+                    }
+                } else {
+                    // Removing from group
+                    newParentId = undefined;
+                    newPosition.x = absX;
+                    newPosition.y = absY;
+                }
+            }
+
             return {
             ...node,
+            parentId: newParentId,
+            position: newPosition,
             data: {
                 ...node.data,
                 label: nodeLabel,
@@ -422,6 +476,36 @@
         nodeGroupId = data.id;
         isCreatingGroup = false;
         newGroupName = '';
+
+        // Create visual group node immediately
+        const currentNode = nodes.find(n => n.id === selectedNodeId);
+        let groupX = 0;
+        let groupY = 0;
+        
+        if (currentNode) {
+             // Calculate absolute pos of current node to center group around it
+             let absX = currentNode.position.x;
+             let absY = currentNode.position.y;
+             if (currentNode.parentId) {
+                 const p = nodes.find(n => n.id === currentNode.parentId);
+                 if (p) { absX += p.position.x; absY += p.position.y; }
+             }
+             groupX = absX - 40; // padding
+             groupY = absY - 40;
+        }
+
+        const newGroupNode: Node = {
+            id: `group-${data.id}`,
+            type: 'group',
+            data: { label: data.name },
+            position: { x: groupX, y: groupY },
+            style: `width: 200px; height: 200px; background-color: rgba(240, 240, 240, 0.5); border: 2px dashed #ccc; z-index: -1;`,
+            width: 200,
+            height: 200
+        };
+        
+        nodes = [...nodes, newGroupNode];
+
         updateNode();
     }
   }
