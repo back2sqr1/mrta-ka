@@ -4,6 +4,13 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 export const uiColorToDb = (hex: string) => (hex === '#fecaca' ? 'red' : 'green');
 export const dbColorToUi = (color: string) => (color === 'red' ? '#fecaca' : '#bbf7d0');
 
+export const hexToRgba = (hex: string, alpha: number) => {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+};
+
 export const getMexId = (currentNodes: Node[]) => {
   const existingIds = new Set(currentNodes.map((n) => n.id));
   let i = 0;
@@ -93,6 +100,7 @@ export async function saveFlowToSupabase(
             return {
                 id: parseInt(g.id.replace('group-', '')),
                 name: g.data.label, // Ensure name is preserved/updated
+                color: uiColorToDb(g.data.color as string),
                 position_x: g.position.x,
                 position_y: g.position.y,
                 box_width: width,

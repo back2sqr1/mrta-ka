@@ -3,20 +3,15 @@
     SvelteFlow,
     useSvelteFlow,
     Background,
-    addEdge,
     type Edge,
     type Node,
     type OnConnect,
     type OnConnectEnd,
-    type NodeEventWithPointer,
-    type OnBeforeDelete,
-    getIncomers,
-    getOutgoers,
-    getConnectedEdges,
   } from '@xyflow/svelte';
   import { supabase } from '$lib/supabaseClient';
   import { onMount } from 'svelte';
-  import { uiColorToDb, dbColorToUi, getMexId, getMexEdgeId, saveFlowToSupabase } from '$lib/utils';
+  import { saveFlowToSupabase, hexToRgba } from '$lib/utils';
+  import { loadFlowData, handleNodeDelete, createNewNodeOnConnectEnd, handleConnection, createGroupInDb, createGroupNode } from './flowHelpers.js';
   import GroupNode from './GroupNode.svelte';
   import EditPanel from './EditPanel.svelte';
 
@@ -43,153 +38,14 @@
   let loaded = false;
 
   onMount(async () => {
-    const { data: nodesData } = await supabase.from('nodes').select('*');
-    const { data: edgesData } = await supabase.from('edges').select('*');
-    const { data: groupMembersData } = await supabase.from('node_group_members').select('*');
-    const { data: groupsData } = await supabase.from('node_groups').select('*');
-
-    if (groupsData) {
-      nodeGroupsList = groupsData;
-    }
-
-    const nodeGroups = new Map();
-    if (groupMembersData) {
-      groupMembersData.forEach((m: any) => {
-        nodeGroups.set(m.node_id, { id: m.id, group_id: m.node_group_id });
-      });
-    }
-
-    if (nodesData && nodesData.length > 0) {
-      let flowNodes = nodesData.map((n: any) => {
-        const groupInfo = nodeGroups.get(n.id);
-        return {
-          id: n.id,
-          type: n.id === 'A' ? 'input' : 'default',
-          data: {
-            label: n.id,
-            x_coord: n.decision_x,
-            y_coord: n.decision_y,
-            color: dbColorToUi(n.color),
-            node_group_member_id: groupInfo?.id,
-            node_group_id: groupInfo?.group_id,
-            group_x: n.group_x,
-            group_y: n.group_y,
-          },
-          position: { x: n.location_x, y: n.location_y },
-          style: `background: ${dbColorToUi(n.color)}`,
-        };
-      });
-
-      // Process Groups to create Group Nodes
-      const groupsMap = new Map<number, { id: number, name: string, position_x?: number, position_y?: number, box_width?: number, box_height?: number, nodes: Node[] }>();
-      
-      if (groupsData) {
-         groupsData.forEach((g: any) => groupsMap.set(g.id, { ...g, nodes: [] }));
-      }
-
-      // Assign nodes to their groups in the map
-      flowNodes.forEach((n: Node) => {
-          const gid = n.data.node_group_id as number;
-          if (gid && groupsMap.has(gid)) {
-              groupsMap.get(gid)!.nodes.push(n);
-          }
-      });
-
-      const groupNodes: Node[] = [];
-      
-      groupsMap.forEach((g) => {
-          // if (g.nodes.length === 0) return; // Allow empty groups to be rendered so they can be selected
-
-          const padding = 40;
-          let groupX: number;
-          let groupY: number;
-
-          // Determine Group Position
-          if (g.position_x != null && g.position_y != null) {
-              groupX = g.position_x;
-              groupY = g.position_y;
-          } else {
-              // Fallback: Calculate from children's absolute positions
-              const xs = g.nodes.map(n => n.position.x);
-              const ys = g.nodes.map(n => n.position.y);
-              
-              if (xs.length > 0) {
-                  groupX = Math.min(...xs) - padding;
-                  groupY = Math.min(...ys) - padding;
-              } else {
-                  // Default position for empty groups if no position saved
-                  groupX = 0;
-                  groupY = 0;
-              }
-          }
-
-          // Determine Dimensions based on children relative to the group position
-          // We need to calculate where children *will* be to know the size
-          let minRelX = Infinity, maxRelX = -Infinity;
-          let minRelY = Infinity, maxRelY = -Infinity;
-
-          g.nodes.forEach(n => {
-              let relX, relY;
-              if (n.data.group_x != null && n.data.group_y != null) {
-                  relX = n.data.group_x as number;
-                  relY = n.data.group_y as number;
-              } else {
-                  relX = n.position.x - groupX;
-                  relY = n.position.y - groupY;
-              }
-              
-              // Update node with relative position for Svelte Flow
-              n.parentId = `group-${g.id}`;
-              n.position.x = relX;
-              n.position.y = relY;
-              // n.extent = 'parent'; // Removed to allow nodes to go outside
-              
-              minRelX = Math.min(minRelX, relX);
-              maxRelX = Math.max(maxRelX, relX);
-              minRelY = Math.min(minRelY, relY);
-              maxRelY = Math.max(maxRelY, relY);
-          });
-
-          // If for some reason we have no children (checked above), defaults
-          if (minRelX === Infinity) { minRelX = 0; maxRelX = 100; minRelY = 0; maxRelY = 100; }
-
-          let width: number;
-          let height: number;
-
-          if (g.box_width != null && g.box_height != null) {
-              width = g.box_width;
-              height = g.box_height;
-          } else {
-              // Calculate width/height with some padding/margin
-              width = maxRelX + 150 + padding; 
-              height = maxRelY + 50 + padding;
-          }
-
-          const groupNode: Node = {
-              id: `group-${g.id}`,
-              type: 'group',
-              data: { label: g.name },
-              position: { x: groupX, y: groupY },
-              style: `width: ${width}px; height: ${height}px; background-color: rgba(240, 240, 240, 0.5); border: 2px dashed #ccc; z-index: -1;`,
-              width: width,
-              height: height,
-          };
-          groupNodes.push(groupNode);
-      });
-
-      nodes = [...groupNodes, ...flowNodes];
+    const data = await loadFlowData(supabase);
+    if (data.nodes.length > 0) {
+        nodes = data.nodes;
     } else {
-      nodes = initialNodes;
+        nodes = initialNodes;
     }
-
-    if (edgesData) {
-      edges = edgesData.map((e: any) => ({
-        id: String(e.id),
-        source: e.source_node_id,
-        target: e.target_node_id,
-        animated: true,
-      }));
-    }
+    edges = data.edges;
+    nodeGroupsList = data.nodeGroupsList;
     loaded = true;
   });
 
@@ -217,84 +73,22 @@
   const { screenToFlowPosition, deleteElements } = useSvelteFlow();
 
   const onbeforedelete: any = async ({ nodes: deletedNodes, edges: _edges }: { nodes: Node[], edges: Edge[] }) => {
-    let remainingNodes = [...nodes]; 
-    
-    edges = deletedNodes.reduce((acc, node) => {
-      const incomers = getIncomers(node, remainingNodes, acc);
-      const outgoers = getOutgoers(node, remainingNodes, acc);
-      const connectedEdges = getConnectedEdges([node], acc);
-
-      const remainingEdges = acc.filter((edge) => !connectedEdges.includes(edge));
-
-      const createdEdges = incomers.flatMap(({ id: source }) =>
-        outgoers.map(({ id: target }) => {
-            const edgeId = getMexEdgeId([...remainingEdges]);
-            return {
-                id: edgeId,
-                source,
-                target,
-                animated: true,
-            };
-        }),
-      );
-
-      remainingNodes = remainingNodes.filter((rn) => rn.id !== node.id);
-
-      return [...remainingEdges, ...createdEdges];
-    }, edges);
-
-    nodes = remainingNodes;
-
+    const result = handleNodeDelete(deletedNodes, nodes, edges);
+    nodes = result.nodes;
+    edges = result.edges;
     return true;
   };
 
   const handleConnect: OnConnect = (params) => {
-    // Remove any existing edge that matches the connection to ensure we replace it with the animated one
-    const filteredEdges = edges.filter(e => {
-        const isSameSource = e.source === params.source;
-        const isSameTarget = e.target === params.target;
-        const isSameSourceHandle = (e.sourceHandle ?? null) === (params.sourceHandle ?? null);
-        const isSameTargetHandle = (e.targetHandle ?? null) === (params.targetHandle ?? null);
-        return !(isSameSource && isSameTarget && isSameSourceHandle && isSameTargetHandle);
-    });
-
-    const edgeId = getMexEdgeId(filteredEdges);
-    console.log('Connecting with edge ID:', edgeId, { source: params.source, target: params.target, id: edgeId, animated: true });
-    edges = addEdge({ ...params, id: edgeId, animated: true }, filteredEdges);
+    edges = handleConnection(params, edges);
   };
 
   const handleConnectEnd: OnConnectEnd = (event, connectionState) => {
-    if (connectionState.isValid) return;
-    // console.log("Connect end - adding new node");
-
-    const sourceNodeId = connectionState.fromNode?.id ?? 'A';
-    const id = getMexId(nodes);
-    const edgeId = getMexEdgeId(edges);
-    const { clientX, clientY } =
-      'changedTouches' in event ? event.changedTouches[0] : event;
-
-    const newNode: Node = {
-      id,
-      data: { label: `${id}`, x_coord: 0, y_coord: 0, color: '#bbf7d0' },
-      style: 'background: #bbf7d0',
-      // project the screen coordinates to pane coordinates
-      position: screenToFlowPosition({
-        x: clientX,
-        y: clientY,
-      }),
-      // set the origin of the new node so it is centered
-      origin: [0.5, 0.0],
-    };
-    nodes = [...nodes, newNode];
-    edges = [
-      ...edges,
-      {
-        source: sourceNodeId,
-        target: id,
-        id: edgeId,
-        animated: true,
-      },
-    ];
+    const result = createNewNodeOnConnectEnd(event, connectionState, nodes, edges, screenToFlowPosition);
+    if (result) {
+        nodes = [...nodes, result.newNode];
+        edges = [...edges, result.newEdge];
+    }
   };
 
   const handleContextMenu = ({ event, node }: { event: MouseEvent; node: Node }) => {
@@ -347,6 +141,7 @@
     nodes = nodes.map((node) => {
       if (node.id === selectedNodeId) {
         if (node.type === 'group') {
+             const groupColor = node.data.color as string;
              return {
                 ...node,
                 data: {
@@ -359,7 +154,7 @@
                 },
                 width: groupWidth,
                 height: groupHeight,
-                style: `width: ${groupWidth}px; height: ${groupHeight}px; background-color: rgba(240, 240, 240, 0.5); border: 2px dashed #ccc; z-index: -1;`
+                style: `width: ${groupWidth}px; height: ${groupHeight}px; background-color: ${hexToRgba(groupColor, 0.2)}; border: 2px dashed ${groupColor}; z-index: -1;`
              };
         } else {
             // Handle Group Change Logic
@@ -460,50 +255,15 @@
   async function createGroup() {
     if (!newGroupName.trim()) return;
     
-    const { data, error } = await supabase
-        .from('node_groups')
-        .insert({ name: newGroupName })
-        .select()
-        .single();
+    const data = await createGroupInDb(supabase, newGroupName, nodeColor);
     
-    if (error) {
-        console.error('Error creating group:', error);
-        return;
-    }
-
     if (data) {
         nodeGroupsList = [...nodeGroupsList, data];
         nodeGroupId = data.id;
         isCreatingGroup = false;
         newGroupName = '';
 
-        // Create visual group node immediately
-        const currentNode = nodes.find(n => n.id === selectedNodeId);
-        let groupX = 0;
-        let groupY = 0;
-        
-        if (currentNode) {
-             // Calculate absolute pos of current node to center group around it
-             let absX = currentNode.position.x;
-             let absY = currentNode.position.y;
-             if (currentNode.parentId) {
-                 const p = nodes.find(n => n.id === currentNode.parentId);
-                 if (p) { absX += p.position.x; absY += p.position.y; }
-             }
-             groupX = absX - 40; // padding
-             groupY = absY - 40;
-        }
-
-        const newGroupNode: Node = {
-            id: `group-${data.id}`,
-            type: 'group',
-            data: { label: data.name },
-            position: { x: groupX, y: groupY },
-            style: `width: 200px; height: 200px; background-color: rgba(240, 240, 240, 0.5); border: 2px dashed #ccc; z-index: -1;`,
-            width: 200,
-            height: 200
-        };
-        
+        const newGroupNode = createGroupNode(data, selectedNodeId, nodes);
         nodes = [...nodes, newGroupNode];
 
         updateNode();

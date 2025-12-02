@@ -1,5 +1,6 @@
 <script lang="ts">
   import { Panel } from '@xyflow/svelte';
+  import { dbColorToUi } from '../../lib/utils.js';
 
   let {
     selectedNodeId,
@@ -65,7 +66,7 @@
                 {:else}
                     <select value={nodeGroupId || ''} onchange={updateGroup} class="border p-1 rounded">
                         <option value="">None</option>
-                        {#each nodeGroupsList as group}
+                        {#each nodeGroupsList.filter((g: any) => dbColorToUi(g.color) === nodeColor) as group}
                             <option value={group.id}>{group.name}</option>
                         {/each}
                         <option value="__CREATE_NEW__">+ Create New Group</option>
