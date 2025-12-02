@@ -29,27 +29,94 @@
 
   let loaded = false;
 
-  onMount(async () => {
-    const { data, error } = await supabase
-      .from('decision_diagrams')
-      .select('nodes, edges')
-      .eq('id', 1)
-      .single();
+  const uiColorToDb = (hex: string) => (hex === '#fecaca' ? 'red' : 'green');
+  const dbColorToUi = (color: string) => (color === 'red' ? '#fecaca' : '#bbf7d0');
 
-    if (data) {
-      nodes = data.nodes || initialNodes;
-      edges = data.edges || [];
+  onMount(async () => {
+    const { data: nodesData } = await supabase.from('nodes').select('*');
+    const { data: edgesData } = await supabase.from('edges').select('*');
+
+    if (nodesData && nodesData.length > 0) {
+      nodes = nodesData.map((n: any) => ({
+        id: n.id,
+        type: n.id === 'A' ? 'input' : 'default',
+        data: {
+          label: n.id,
+          x_coord: n.decision_x,
+          y_coord: n.decision_y,
+          color: dbColorToUi(n.color),
+        },
+        position: { x: n.location_x, y: n.location_y },
+        style: `background: ${dbColorToUi(n.color)}`,
+      }));
+    } else {
+      nodes = initialNodes;
+    }
+
+    if (edgesData) {
+      edges = edgesData.map((e: any) => ({
+        id: `${e.source_node_id}--${e.target_node_id}`,
+        source: e.source_node_id,
+        target: e.target_node_id,
+        animated: true,
+      }));
     }
     loaded = true;
   });
 
   async function saveFlow() {
     if (!loaded) return;
-    const { error } = await supabase
-      .from('decision_diagrams')
-      .upsert({ id: 1, nodes, edges }, { onConflict: 'id' });
 
-    if (error) console.error('Error saving flow:', error);
+    // 1. Upsert Nodes
+    const dbNodes = nodes.map((n) => ({
+      id: n.id,
+      color: uiColorToDb(n.data.color as string),
+      location_x: n.position.x,
+      location_y: n.position.y,
+      decision_x: n.data.x_coord,
+      decision_y: n.data.y_coord,
+    }));
+
+    const { error: upsertError } = await supabase.from('nodes').upsert(dbNodes);
+    if (upsertError) console.error('Error upserting nodes:', upsertError);
+
+    // 2. Delete obsolete nodes
+    const currentIds = nodes.map((n) => n.id);
+    const { data: allDbNodes } = await supabase.from('nodes').select('id');
+    if (allDbNodes) {
+      const toDelete = allDbNodes
+        .map((n: any) => n.id)
+        .filter((id: string) => !currentIds.includes(id));
+
+      if (toDelete.length > 0) {
+        const { error: deleteError } = await supabase
+          .from('nodes')
+          .delete()
+          .in('id', toDelete);
+        if (deleteError) console.error('Error deleting nodes:', deleteError);
+      }
+    }
+
+    // 3. Replace Edges
+    const { error: deleteEdgesError } = await supabase
+      .from('edges')
+      .delete()
+      .gt('id', 0);
+    if (deleteEdgesError)
+      console.error('Error deleting edges:', deleteEdgesError);
+
+    const dbEdges = edges.map((e) => ({
+      source_node_id: e.source,
+      target_node_id: e.target,
+    }));
+
+    if (dbEdges.length > 0) {
+      const { error: insertEdgesError } = await supabase
+        .from('edges')
+        .insert(dbEdges);
+      if (insertEdgesError)
+        console.error('Error inserting edges:', insertEdgesError);
+    }
   }
 
   let saveTimeout: ReturnType<typeof setTimeout>;
