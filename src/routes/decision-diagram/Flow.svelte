@@ -9,6 +9,8 @@
     type OnConnectEnd,
     type NodeEventWithPointer,
   } from '@xyflow/svelte';
+  import { supabase } from '$lib/supabaseClient';
+  import { onMount } from 'svelte';
 
   import '@xyflow/svelte/dist/style.css';
 
@@ -24,6 +26,46 @@
 
   let nodes = $state.raw<Node[]>(initialNodes);
   let edges = $state.raw<Edge[]>([]);
+
+  let loaded = false;
+
+  onMount(async () => {
+    const { data, error } = await supabase
+      .from('decision_diagrams')
+      .select('nodes, edges')
+      .eq('id', 1)
+      .single();
+
+    if (data) {
+      nodes = data.nodes || initialNodes;
+      edges = data.edges || [];
+    }
+    loaded = true;
+  });
+
+  async function saveFlow() {
+    if (!loaded) return;
+    const { error } = await supabase
+      .from('decision_diagrams')
+      .upsert({ id: 1, nodes, edges }, { onConflict: 'id' });
+
+    if (error) console.error('Error saving flow:', error);
+  }
+
+  let saveTimeout: ReturnType<typeof setTimeout>;
+
+  $effect(() => {
+    // dependencies
+    const n = nodes;
+    const e = edges;
+
+    if (!loaded) return;
+
+    clearTimeout(saveTimeout);
+    saveTimeout = setTimeout(() => {
+      saveFlow();
+    }, 1000);
+  });
 
   const getMexId = (currentNodes: Node[]) => {
     const existingIds = new Set(currentNodes.map((n) => n.id));
