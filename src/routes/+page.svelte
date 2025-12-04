@@ -6,6 +6,36 @@
     import { fetchMapData, generateRobotSteps, updateRobotPositionInDb } from '$lib/mapData';
 
     let edges = $state<Edge[]>([]);
+
+    $effect(() => {
+        const currentRobots = robotSteps.length > 0 
+            ? robotSteps[Math.min(currentStep, robotSteps.length - 1)]
+            : initialRobots;
+            
+        const newEdges: Edge[] = [];
+        
+        currentRobots.forEach((robot: Node) => {
+            if (!robot.data.is_leader) {
+                staticNodes.forEach((node: Node) => {
+                    if (robot.data.color === node.data.dbColor) {
+                        const dx = robot.position.x - node.position.x;
+                        const dy = robot.position.y - node.position.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy).toFixed(2);
+                        
+                        newEdges.push({
+                            id: `edge-${robot.id}-${node.id}`,
+                            source: robot.id,
+                            target: node.id,
+                            label: `${distance}`,
+                            type: 'straight',
+                            style: 'stroke: #999; stroke-dasharray: 5 5;',
+                        });
+                    }
+                });
+            }
+        });
+        edges = newEdges;
+    });
     
     let staticNodes = $state<Node[]>([]);
     let initialRobots = $state<Node[]>([]);
@@ -65,6 +95,31 @@
         }
     }
 
+    function updateRobotPosition(node: any) {
+        const robotIndex = initialRobots.findIndex(r => r.id === node.id);
+        if (robotIndex !== -1) {
+            // Create a new object to ensure reactivity triggers
+            const updatedRobots = [...initialRobots];
+            updatedRobots[robotIndex] = { 
+                ...updatedRobots[robotIndex], 
+                position: { ...node.position } 
+            };
+            initialRobots = updatedRobots;
+        }
+    }
+
+    function handleNodeDrag(event: any) {
+        // Only allow updates on the initial step (Step 0)
+        if (currentStep !== 0) return;
+
+        const payload = event.detail || event;
+        const node = payload.targetNode || payload.node;
+        
+        if (node && node.type === 'robot') {
+            updateRobotPosition(node);
+        }
+    }
+
     async function handleNodeDragStop(event: any) {
         // Only allow DB updates on the initial step (Step 0)
         if (currentStep !== 0) return;
@@ -81,16 +136,7 @@
             } else {
                 // Update the initial step in our local state to match
                 // This will automatically trigger the derived stores to update
-                const robotIndex = initialRobots.findIndex(r => r.id === node.id);
-                if (robotIndex !== -1) {
-                    // Create a new object to ensure reactivity triggers
-                    const updatedRobots = [...initialRobots];
-                    updatedRobots[robotIndex] = { 
-                        ...updatedRobots[robotIndex], 
-                        position: { ...node.position } 
-                    };
-                    initialRobots = updatedRobots;
-                }
+                updateRobotPosition(node);
             }
         }
     }
@@ -134,7 +180,12 @@
     <div class="flex-1 p-8 pt-0 min-h-0 flex gap-6">
         <div class="flex-1 h-full">
             <div class="bg-white rounded-lg shadow-lg overflow-hidden border border-gray-200 h-full relative flex items-center justify-center bg-slate-100">
-                <CartesianGrid bind:nodes bind:edges onNodeDragStop={handleNodeDragStop} />
+                <CartesianGrid 
+                    bind:nodes 
+                    bind:edges 
+                    onNodeDragStop={handleNodeDragStop} 
+                    onNodeDrag={handleNodeDrag}
+                />
             </div>
         </div>
         <div class="w-80 flex-none">

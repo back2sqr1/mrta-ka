@@ -26,6 +26,6 @@
   >
     {data.label}
   </div>
-  <Handle type="source" position={Position.Right} class="!bg-transparent !w-full !h-full !border-none !top-0 !left-0 !transform-none !rounded-full opacity-0" />
-  <Handle type="target" position={Position.Left} class="!bg-transparent !w-full !h-full !border-none !top-0 !left-0 !transform-none !rounded-full opacity-0" />
+  <Handle type="source" position={Position.Top} style="top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0;" />
+  <Handle type="target" position={Position.Top} style="top: 50%; left: 50%; transform: translate(-50%, -50%); opacity: 0;" />
 </div>

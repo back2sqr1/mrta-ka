@@ -14,10 +14,11 @@
   import PointNode from './PointNode.svelte';
   import RobotNode from './RobotNode.svelte';
 
-  let { nodes = $bindable([]), edges = $bindable([]), onNodeDragStop } = $props<{
+  let { nodes = $bindable([]), edges = $bindable([]), onNodeDragStop, onNodeDrag } = $props<{
     nodes: Node[];
     edges: Edge[];
     onNodeDragStop?: (event: any) => void;
+    onNodeDrag?: (event: any) => void;
   }>();
 
   const nodeTypes: NodeTypes = {
@@ -33,6 +34,12 @@
   function handleNodeDragStop(event: any) {
     if (onNodeDragStop) {
       onNodeDragStop(event);
+    }
+  }
+
+  function handleNodeDrag(event: any) {
+    if (onNodeDrag) {
+      onNodeDrag(event);
     }
   }
 
@@ -66,6 +73,8 @@
     nodesConnectable={false}
     on:nodedragstop={handleNodeDragStop}
     onnodedragstop={handleNodeDragStop}
+    on:nodedrag={handleNodeDrag}
+    onnodedrag={handleNodeDrag}
     fitView
     minZoom={0.1}
     maxZoom={4}
