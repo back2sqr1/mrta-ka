@@ -83,8 +83,9 @@ export function generateRobotSteps(
 
     // Calculate move distance (Only if Leader is moving)
     let moveDistance = 0;
-    if (movingRobotIndex !== -1 && movingRobotIndex === leaderIndex && targetPosition) {
-        const currentPos = initialRobots[movingRobotIndex].position;
+    // We always calculate distance based on the LEADER moving to the target
+    if (leaderIndex !== -1 && targetPosition) {
+        const currentPos = initialRobots[leaderIndex].position;
         const dx = targetPosition.x - currentPos.x;
         const dy = targetPosition.y - currentPos.y;
         moveDistance = Math.sqrt(dx * dx + dy * dy);
@@ -99,7 +100,7 @@ export function generateRobotSteps(
         const isLeader = (leaderIndex !== -1 && index === leaderIndex);
         const isFollower = !isLeader; 
         
-        // Apply radius to followers if distance is calculated (Leader is moving)
+        // Apply radius to followers if distance is calculated
         const radius = (isFollower && moveDistance > 0) ? moveDistance : undefined;
 
         return {
@@ -114,13 +115,38 @@ export function generateRobotSteps(
     });
     newRobotSteps.push(step0Robots);
 
-    // Step 1: Moving Robot moves to the target point node
+    // Step 1: Moving Robot moves to the target point node AND followers move to dot positions
     if (initialRobots.length > 0) {
         const step1Robots = JSON.parse(JSON.stringify(step0Robots));
         
+        // Move Leader
         if (movingRobotIndex !== -1 && targetPosition) {
             step1Robots[movingRobotIndex].position = { ...targetPosition };
         }
+
+        // Move Followers
+        step1Robots.forEach((robot: any, index: number) => {
+            // If it's a follower (has a radius/dot)
+            if (index !== leaderIndex && robot.data.radius) {
+                // Calculate dot position relative to robot center
+                // Default dot position is at angle 0 (right side) if not specified
+                const angle = robot.data.dotAngle ?? 0;
+                const dotX = robot.data.dotX ?? (Math.cos(angle) * robot.data.radius);
+                const dotY = robot.data.dotY ?? (Math.sin(angle) * robot.data.radius);
+                
+                // Move robot to the dot's absolute position
+                // The dot's position is relative to the robot's CURRENT position (from step 0)
+                const originalPos = step0Robots[index].position;
+                
+                robot.position = {
+                    x: originalPos.x + dotX,
+                    y: originalPos.y + dotY
+                };
+                
+                // Clear the radius/dot for the final step as they have "arrived"
+                robot.data.radius = undefined;
+            }
+        });
         
         newRobotSteps.push(step1Robots);
     }

@@ -14,6 +14,28 @@
             
         const newEdges: Edge[] = [];
         
+        // Add edge from leader to target
+        if (selectedLeaderId && selectedTargetNodeId) {
+            const leader = currentRobots.find((r: any) => r.id === selectedLeaderId);
+            const target = staticNodes.find((n: any) => n.id === selectedTargetNodeId);
+            
+            if (leader && target) {
+                const dx = leader.position.x - target.position.x;
+                const dy = leader.position.y - target.position.y;
+                const distance = Math.sqrt(dx * dx + dy * dy).toFixed(2);
+
+                newEdges.push({
+                    id: `edge-leader-${leader.id}-${target.id}`,
+                    source: leader.id,
+                    target: target.id,
+                    label: `${distance}`,
+                    type: 'straight',
+                    animated: true,
+                    style: `stroke: ${leader.data.color}; stroke-width: 2;`,
+                });
+            }
+        }
+
         currentRobots.forEach((robot: Node) => {
             if (!robot.data.is_leader) {
                 staticNodes.forEach((node: Node) => {
@@ -57,7 +79,32 @@
         if (robotSteps.length > 0) {
             // Ensure currentStep is valid
             const safeStep = Math.min(currentStep, robotSteps.length - 1);
-            return [...staticNodes, ...robotSteps[safeStep]];
+            
+            const robotsWithData = robotSteps[safeStep].map((robot: any) => {
+                const neighbors: any[] = [];
+                if (!robot.data.is_leader) {
+                    staticNodes.forEach((node: Node) => {
+                        if (robot.data.color === node.data.dbColor) {
+                            neighbors.push({
+                                id: node.id,
+                                x: node.position.x,
+                                y: node.position.y
+                            });
+                        }
+                    });
+                }
+                return {
+                    ...robot,
+                    data: {
+                        ...robot.data,
+                        currentPosition: robot.position,
+                        neighbors,
+                        onDotMove: (x: number, y: number) => handleDotMove(robot.id, x, y)
+                    }
+                };
+            });
+
+            return [...staticNodes, ...robotsWithData];
         }
         return [...staticNodes];
     });
@@ -103,6 +150,22 @@
             updatedRobots[robotIndex] = { 
                 ...updatedRobots[robotIndex], 
                 position: { ...node.position } 
+            };
+            initialRobots = updatedRobots;
+        }
+    }
+
+    function handleDotMove(robotId: string, x: number, y: number) {
+        const robotIndex = initialRobots.findIndex(r => r.id === robotId);
+        if (robotIndex !== -1) {
+            const updatedRobots = [...initialRobots];
+            updatedRobots[robotIndex] = {
+                ...updatedRobots[robotIndex],
+                data: {
+                    ...updatedRobots[robotIndex].data,
+                    dotX: x,
+                    dotY: y
+                }
             };
             initialRobots = updatedRobots;
         }
@@ -193,7 +256,6 @@
                 robots={initialRobots} 
                 pointNodes={staticNodes}
                 bind:selectedLeaderId 
-                bind:selectedMovingRobotId
                 bind:selectedTargetNodeId 
             />
         </div>

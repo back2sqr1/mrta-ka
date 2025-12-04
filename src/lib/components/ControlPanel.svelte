@@ -5,22 +5,20 @@
         robots, 
         pointNodes, 
         selectedLeaderId = $bindable(), 
-        selectedMovingRobotId = $bindable(),
         selectedTargetNodeId = $bindable() 
     } = $props<{
         robots: Node[];
         pointNodes: Node[];
         selectedLeaderId: string | null;
-        selectedMovingRobotId: string | null;
         selectedTargetNodeId: string | null;
     }>();
 
-    // Derived filtered nodes based on moving robot color
+    // Derived filtered nodes based on moving robot color (Leader is always moving)
     let filteredPointNodes = $derived.by(() => {
-        if (!selectedMovingRobotId) return pointNodes;
+        if (!selectedLeaderId) return pointNodes;
         
-        const movingRobot = robots.find((r: any) => r.id === selectedMovingRobotId);
-        const requiredColor = movingRobot?.data.color;
+        const leaderRobot = robots.find((r: any) => r.id === selectedLeaderId);
+        const requiredColor = leaderRobot?.data.color;
         
         if (!requiredColor) return pointNodes;
 
@@ -68,29 +66,6 @@
         </div>
 
         <div>
-            <label for="moving-select" class="block text-sm font-medium leading-6 text-gray-900">
-                Select Robot to Move
-            </label>
-            <div class="mt-2">
-                <select
-                    id="moving-select"
-                    bind:value={selectedMovingRobotId}
-                    class="block w-full rounded-md border-0 py-1.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 focus:ring-2 focus:ring-inset focus:ring-indigo-600 sm:text-sm sm:leading-6"
-                >
-                    <option value={null}>-- Select Robot --</option>
-                    {#each robots as robot}
-                        <option value={robot.id}>
-                            {robot.data.label} {robot.id === selectedLeaderId ? '(Leader)' : '(Follower)'}
-                        </option>
-                    {/each}
-                </select>
-            </div>
-            <p class="mt-2 text-sm text-gray-500">
-                Select which robot will move in the next step.
-            </p>
-        </div>
-
-        <div>
             <label for="target-select" class="block text-sm font-medium leading-6 text-gray-900">
                 Select Target Destination
             </label>
@@ -109,11 +84,11 @@
                 </select>
             </div>
             <p class="mt-2 text-sm text-gray-500">
-                {#if selectedMovingRobotId}
-                    {@const movingRobot = robots.find((r: any) => r.id === selectedMovingRobotId)}
-                    {movingRobot?.data.label} ({movingRobot?.data.color}) can only move to {movingRobot?.data.color} nodes.
+                {#if selectedLeaderId}
+                    {@const leader = robots.find((r: any) => r.id === selectedLeaderId)}
+                    {leader?.data.label} ({leader?.data.color}) can only move to {leader?.data.color} nodes.
                 {:else}
-                    Select a robot to see valid destinations.
+                    Select a leader to see valid destinations.
                 {/if}
             </p>
         </div>
