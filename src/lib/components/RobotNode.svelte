@@ -8,6 +8,17 @@
   let dotY = $state(data.dotY ?? 0);
   let isDragging = $state(false);
   let containerRef: HTMLElement | null = $state(null);
+
+  $effect(() => {
+    if (typeof data.radius === 'number') {
+      const dist = Math.sqrt(dotX * dotX + dotY * dotY);
+      if (dist > data.radius) {
+        const scale = data.radius / dist;
+        dotX *= scale;
+        dotY *= scale;
+      }
+    }
+  });
   
   function handleMouseDown(e: MouseEvent) {
     e.stopPropagation();
