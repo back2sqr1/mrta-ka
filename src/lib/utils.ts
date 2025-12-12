@@ -70,10 +70,10 @@ export async function saveFlowToSupabase(
             return {
                 id: n.id,
                 color: uiColorToDb(n.data.color as string),
-                location_x: x,
-                location_y: y,
-                decision_x: n.data.x_coord,
-                decision_y: n.data.y_coord,
+                location_x: n.data.location_x ?? x,
+                location_y: n.data.location_y ?? y,
+                decision_x: x,
+                decision_y: y,
                 group_x: group_x,
                 group_y: group_y,
             };

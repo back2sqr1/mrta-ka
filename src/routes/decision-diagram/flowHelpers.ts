@@ -1,6 +1,6 @@
 import type { Node, Edge, ConnectionState, Connection } from '@xyflow/svelte';
 import { getIncomers, getOutgoers, getConnectedEdges, addEdge } from '@xyflow/svelte';
-import { dbColorToUi, getMexId, getMexEdgeId, hexToRgba } from '$lib/utils';
+import { dbColorToUi, uiColorToDb, getMexId, getMexEdgeId, hexToRgba } from '$lib/utils';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 export function handleConnection(params: Connection, edges: Edge[]) {
@@ -47,13 +47,15 @@ export async function loadFlowData(supabase: SupabaseClient) {
             label: n.id,
             x_coord: n.decision_x,
             y_coord: n.decision_y,
+            location_x: n.location_x,
+            location_y: n.location_y,
             color: dbColorToUi(n.color),
             node_group_member_id: groupInfo?.id,
             node_group_id: groupInfo?.group_id,
             group_x: n.group_x,
             group_y: n.group_y,
           },
-          position: { x: n.location_x, y: n.location_y },
+          position: { x: n.decision_x ?? n.location_x ?? 0, y: n.decision_y ?? n.location_y ?? 0 },
           style: `background: ${dbColorToUi(n.color)}`,
         };
       });
